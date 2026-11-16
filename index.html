@@ -1,0 +1,518 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stationery Sound</title>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 20px;
+    background: #111;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+h1 {
+    font-size: 23px;
+    letter-spacing: 3px;
+    margin-bottom: 20px;
+}
+
+#status {
+    color: #aaa;
+    font-size: 13px;
+    margin-bottom: 15px;
+}
+
+#start {
+    width: 100%;
+    padding: 16px;
+    border: none;
+    background: white;
+    color: black;
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+#camera {
+    position: relative;
+    width: 100%;
+    background: #222;
+    overflow: hidden;
+}
+
+video {
+    display: block;
+    width: 100%;
+    height: auto;
+    transform: scaleX(-1);
+}
+
+#overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: scaleX(-1);
+    pointer-events: none;
+}
+
+.controls {
+    margin-top: 25px;
+}
+
+.sound {
+    padding: 15px 0;
+    border-bottom: 1px solid #333;
+}
+
+.sound-title {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+input[type="range"] {
+    width: 100%;
+}
+
+.pen { color: #96dca0; }
+.scissors { color: #ff8296; }
+.stapler { color: #ffcd5a; }
+.tape { color: #50c8ff; }
+</style>
+</head>
+
+<body>
+
+<h1>STATIONERY SOUND</h1>
+
+<div id="status">READY</div>
+
+<button id="start">START CAMERA</button>
+
+<div id="camera">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+</div>
+
+<div class="controls">
+
+    <div class="sound">
+        <div class="sound-title">
+            <span class="pen">PEN</span>
+            <span id="v0">100%</span>
+        </div>
+        <input type="range" min="0" max="100" value="100" id="vol0">
+    </div>
+
+    <div class="sound">
+        <div class="sound-title">
+            <span class="scissors">SCISSORS</span>
+            <span id="v1">100%</span>
+        </div>
+        <input type="range" min="0" max="100" value="100" id="vol1">
+    </div>
+
+    <div class="sound">
+        <div class="sound-title">
+            <span class="stapler">STAPLER</span>
+            <span id="v2">100%</span>
+        </div>
+        <input type="range" min="0" max="100" value="100" id="vol2">
+    </div>
+
+    <div class="sound">
+        <div class="sound-title">
+            <span class="tape">TAPE</span>
+            <span id="v3">100%</span>
+        </div>
+        <input type="range" min="0" max="100" value="100" id="vol3">
+    </div>
+
+</div>
+
+<script>
+const MODEL = "./models/best.onnx";
+
+const SOUND_FILES = [
+    "./sounds/pen.mp3",
+    "./sounds/scissors.mp3",
+    "./sounds/stapler.mp3",
+    "./sounds/tape.mp3"
+];
+
+const COLORS = [
+    "#96dca0",
+    "#ff8296",
+    "#ffcd5a",
+    "#50c8ff"
+];
+
+const LABELS = [
+    "PEN",
+    "SCISSORS",
+    "STAPLER",
+    "TAPE"
+];
+
+const SIZE = 640;
+const REPEAT_INTERVAL = 500;
+const VOLUME_MULTIPLIERS = [1.0, 2.0, 0.7, 0.25];
+const DETECTION_HOLD = 650;
+const CONFIDENCE = 0.35;
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+const statusText = document.getElementById("status");
+
+let session;
+let audioContext;
+let buffers = [];
+let gains = [];
+let sources = [null, null, null, null];
+
+let lastSeen = [0, 0, 0, 0];
+let soundActive = [false, false, false, false];
+let nextPlay = [0, 0, 0, 0];
+
+let detections = [];
+let running = false;
+let processing = false;
+
+const inputCanvas = document.createElement("canvas");
+inputCanvas.width = SIZE;
+inputCanvas.height = SIZE;
+
+const inputCtx = inputCanvas.getContext("2d", {
+    willReadFrequently: true
+});
+
+// 音量設定
+for (let i = 0; i < 4; i++) {
+    const slider = document.getElementById("vol" + i);
+
+    slider.addEventListener("input", () => {
+        const value = Number(slider.value);
+        document.getElementById("v" + i).textContent = value + "%";
+
+        if (gains[i]) {
+            gains[i].gain.value = (value / 100) * VOLUME_MULTIPLIERS[i];
+        }
+    });
+}
+
+// 音声を読み込む
+async function loadSounds() {
+    audioContext = new AudioContext();
+
+    for (let i = 0; i < 4; i++) {
+        const response = await fetch(SOUND_FILES[i]);
+
+        if (!response.ok) {
+            throw new Error("音源を読み込めません: " + SOUND_FILES[i]);
+        }
+
+        const data = await response.arrayBuffer();
+        buffers[i] = await audioContext.decodeAudioData(data);
+
+        gains[i] = audioContext.createGain();
+        gains[i].gain.value =
+            (Number(document.getElementById("vol" + i).value) / 100) * VOLUME_MULTIPLIERS[i];
+
+        gains[i].connect(audioContext.destination);
+    }
+}
+
+// 音を再生
+function playSound(index) {
+    if (!buffers[index]) return;
+
+    if (sources[index]) {
+        try {
+            sources[index].stop();
+        } catch (e) {}
+    }
+
+    const source = audioContext.createBufferSource();
+    source.buffer = buffers[index];
+    source.connect(gains[index]);
+    source.start();
+
+    sources[index] = source;
+}
+
+// 音を停止
+function stopSound(index) {
+    if (sources[index]) {
+        try {
+            sources[index].stop();
+        } catch (e) {}
+        sources[index] = null;
+    }
+}
+
+// カメラ画像を640×640に変換
+function preprocess() {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+
+    const scale = Math.min(SIZE / w, SIZE / h);
+    const newW = Math.round(w * scale);
+    const newH = Math.round(h * scale);
+
+    const padX = (SIZE - newW) / 2;
+    const padY = (SIZE - newH) / 2;
+
+    inputCtx.fillStyle = "rgb(114,114,114)";
+    inputCtx.fillRect(0, 0, SIZE, SIZE);
+
+    inputCtx.drawImage(video, padX, padY, newW, newH);
+
+    const image = inputCtx.getImageData(0, 0, SIZE, SIZE);
+    const pixels = image.data;
+
+    const input = new Float32Array(3 * SIZE * SIZE);
+    const area = SIZE * SIZE;
+
+    for (let i = 0; i < area; i++) {
+        input[i] = pixels[i * 4] / 255;
+        input[area + i] = pixels[i * 4 + 1] / 255;
+        input[area * 2 + i] = pixels[i * 4 + 2] / 255;
+    }
+
+    return {
+        tensor: new ort.Tensor("float32", input, [1, 3, SIZE, SIZE]),
+        scale,
+        padX,
+        padY,
+        width: w,
+        height: h
+    };
+}
+
+// IoU計算
+function iou(a, b) {
+    const x1 = Math.max(a.x1, b.x1);
+    const y1 = Math.max(a.y1, b.y1);
+    const x2 = Math.min(a.x2, b.x2);
+    const y2 = Math.min(a.y2, b.y2);
+
+    const intersection =
+        Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+
+    const areaA = (a.x2 - a.x1) * (a.y2 - a.y1);
+    const areaB = (b.x2 - b.x1) * (b.y2 - b.y1);
+
+    return intersection / (areaA + areaB - intersection + 0.00001);
+}
+
+// 推論結果を解析
+function postprocess(output, info) {
+    const data = output.data;
+    const shape = output.dims;
+
+    const channelsFirst = shape[1] < shape[2];
+    const channelCount = channelsFirst ? shape[1] : shape[2];
+    const count = channelsFirst ? shape[2] : shape[1];
+
+    function value(channel, index) {
+        return channelsFirst
+            ? data[channel * count + index]
+            : data[index * channelCount + channel];
+    }
+
+    const candidates = [];
+
+    for (let i = 0; i < count; i++) {
+        let bestClass = -1;
+        let bestScore = 0;
+
+        for (let c = 4; c < channelCount; c++) {
+            const score = value(c, i);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestClass = c - 4;
+            }
+        }
+
+        if (bestScore < CONFIDENCE || bestClass < 0 || bestClass > 3) {
+            continue;
+        }
+
+        const cx = value(0, i);
+        const cy = value(1, i);
+        const w = value(2, i);
+        const h = value(3, i);
+
+        candidates.push({
+            classId: bestClass,
+            score: bestScore,
+            x1: cx - w / 2,
+            y1: cy - h / 2,
+            x2: cx + w / 2,
+            y2: cy + h / 2
+        });
+    }
+
+    // クラスごとにNMS
+    const results = [];
+
+    for (let c = 0; c < 4; c++) {
+        const list = candidates
+            .filter(d => d.classId === c)
+            .sort((a, b) => b.score - a.score);
+
+        const selected = [];
+
+        while (list.length > 0 && selected.length < 20) {
+            const current = list.shift();
+            selected.push(current);
+
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (iou(current, list[i]) > 0.45) {
+                    list.splice(i, 1);
+                }
+            }
+        }
+
+        results.push(...selected);
+    }
+
+    return results.map(d => ({
+        classId: d.classId,
+        score: d.score,
+        x: (d.x1 - info.padX) / info.scale,
+        y: (d.y1 - info.padY) / info.scale,
+        w: (d.x2 - d.x1) / info.scale,
+        h: (d.y2 - d.y1) / info.scale
+    }));
+}
+// 検出枠を描画（非表示）
+function drawDetections() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// 音の開始・停止とリピート
+
+function updateSounds() {
+    const now = Date.now();
+
+    for (let i = 0; i < 4; i++) {
+        const active = now - lastSeen[i] < DETECTION_HOLD;
+
+        if (active && !soundActive[i]) {
+            soundActive[i] = true;
+            playSound(i);
+            nextPlay[i] = now + REPEAT_INTERVAL;
+        }
+
+        if (active && soundActive[i] && now >= nextPlay[i]) {
+            playSound(i);
+            nextPlay[i] = now + REPEAT_INTERVAL;
+        }
+
+        if (!active && soundActive[i]) {
+            soundActive[i] = false;
+            stopSound(i);
+        }
+    }
+}
+
+// カメラ認識
+async function detectLoop() {
+    if (!running) return;
+
+    if (!processing && video.readyState >= 2) {
+        processing = true;
+
+        try {
+            const info = preprocess();
+
+            const results = await session.run({
+                [session.inputNames[0]]: info.tensor
+            });
+
+            detections = postprocess(
+                results[session.outputNames[0]],
+                info
+            );
+
+            const now = Date.now();
+
+            for (const d of detections) {
+                lastSeen[d.classId] = now;
+            }
+
+            drawDetections();
+            updateSounds();
+
+        } catch (error) {
+            console.error(error);
+            statusText.textContent = "RECOGNITION ERROR";
+        }
+
+        processing = false;
+    }
+
+    if (running) {
+        setTimeout(detectLoop, 150);
+    }
+}
+
+// 起動
+document.getElementById("start").addEventListener("click", async () => {
+    const button = document.getElementById("start");
+
+    button.disabled = true;
+    statusText.textContent = "LOADING...";
+
+    try {
+        await loadSounds();
+        await audioContext.resume();
+
+        session = await ort.InferenceSession.create(MODEL, {
+            executionProviders: ["wasm"]
+        });
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: "environment",
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        running = true;
+        statusText.textContent = "CAMERA ACTIVE";
+
+        button.textContent = "RUNNING";
+
+        detectLoop();
+
+    } catch (error) {
+        console.error(error);
+        statusText.textContent = "ERROR: " + error.message;
+        button.disabled = false;
+    }
+});
+</script>
+
+</body>
+</html>
+
