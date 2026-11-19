@@ -215,6 +215,16 @@ body.exhibition #modeToggle {
     }
 }
 
+
+/* スマホでは展示モードボタンを完全に非表示 */
+@media screen and (max-width: 768px) {
+    #modeToggle {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
+}
+
 </style>
     <link rel="manifest" href="./manifest.webmanifest">
 </head>
