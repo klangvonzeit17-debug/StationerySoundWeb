@@ -200,6 +200,17 @@ body.exhibition input[type="range"] {
     }
 }
 
+
+/* 展示モードでは音量調整エリア全体を隠す */
+body.exhibition .controls {
+    display: none !important;
+}
+
+/* 左上の情報パネルをコンパクトにする */
+body.exhibition::before {
+    height: 150px;
+}
+
 </style>
     <link rel="manifest" href="./manifest.webmanifest">
 </head>
