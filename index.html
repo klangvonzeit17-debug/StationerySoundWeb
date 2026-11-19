@@ -211,7 +211,17 @@ body.exhibition::before {
     height: 150px;
 }
 
-</style>
+
+/* 展示モード：起動ボタンを隠す */
+body.exhibition #start {
+    display: none !important;
+}
+
+/* 左上パネルをタイトルと状態表示だけにする */
+body.exhibition::before {
+    height: 85px !important;
+}
+\n</style>
     <link rel="manifest" href="./manifest.webmanifest">
 </head>
 
@@ -655,7 +665,34 @@ for (let i = 0; i < 4; i++) {
     }
 }
 
-</script>
+
+// 展示モード：画面クリックまたはキーボードでカメラ起動
+function startExhibitionCamera() {
+    if (!document.body.classList.contains("exhibition")) return;
+
+    const status = document.getElementById("status");
+    const currentStatus = (status?.textContent || "").trim().toUpperCase();
+
+    if (currentStatus !== "READY") return;
+
+    document.getElementById("start")?.click();
+}
+
+document.addEventListener("click", (event) => {
+    if (event.target.closest("#modeToggle")) return;
+    startExhibitionCamera();
+});
+
+document.addEventListener("keydown", (event) => {
+    if (event.target.closest("#modeToggle")) return;
+
+    if (event.code === "Enter" || event.code === "Space") {
+        if (!document.body.classList.contains("exhibition")) return;
+        event.preventDefault();
+        startExhibitionCamera();
+    }
+});
+\n</script>
 
 </body>
 </html>
