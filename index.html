@@ -91,6 +91,7 @@ input[type="range"] {
 .tape { color: #50c8ff; }
 
 /* ===== VISOUND 展示モード ===== */
+
 #modeToggle {
     position: fixed;
     top: 12px;
@@ -106,6 +107,7 @@ input[type="range"] {
 
 body.exhibition {
     padding: 0;
+    margin: 0;
     overflow: hidden;
     width: 100%;
     height: 100%;
@@ -130,28 +132,28 @@ body.exhibition #overlay {
     height: 100%;
 }
 
+/* 左上の情報パネル */
 body.exhibition::before {
     content: "";
     position: fixed;
     z-index: 5;
     top: 12px;
     left: 12px;
-    width: 280px;
-    height: 365px;
+    width: 220px;
+    height: 85px;
     background: rgba(10, 12, 16, .88);
     border: 1px solid rgba(255,255,255,.2);
     border-radius: 5px;
     backdrop-filter: blur(8px);
 }
 
+/* タイトルとカメラ状態 */
 body.exhibition h1,
-body.exhibition #status,
-body.exhibition #start,
-body.exhibition .controls {
+body.exhibition #status {
     position: fixed;
     left: 28px;
     z-index: 6;
-    width: 248px;
+    width: 185px;
 }
 
 body.exhibition h1 {
@@ -165,63 +167,47 @@ body.exhibition #status {
     margin: 0;
 }
 
-body.exhibition #start {
-    top: 78px;
-    margin: 0;
-    padding: 9px;
-}
-
+/* 展示モードでは不要な表示をすべて隠す */
+body.exhibition #start,
 body.exhibition .controls {
-    top: 130px;
-    margin: 0;
+    display: none !important;
 }
 
-body.exhibition .sound {
-    padding: 8px 0;
-}
-
-body.exhibition .sound-title {
-    margin-bottom: 4px;
-}
-
-body.exhibition input[type="range"] {
-    display: none;
+/* 右上の切り替えボタン */
+body.exhibition #modeToggle {
+    z-index: 1000;
 }
 
 @media (max-height: 500px) {
     body.exhibition::before {
-        height: 330px;
-    }
-    body.exhibition .sound {
-        padding: 5px 0;
-    }
-    body.exhibition .controls {
-        top: 120px;
+        height: 85px;
     }
 }
 
-
-/* 展示モードでは音量調整エリア全体を隠す */
-body.exhibition .controls {
+/* 展示モードはカメラ映像だけにする */
+body.exhibition h1,
+body.exhibition #status,
+body.exhibition #modeToggle,
+body.exhibition::before {
     display: none !important;
 }
-
-/* 左上の情報パネルをコンパクトにする */
-body.exhibition::before {
-    height: 150px;
+\n
+/* スマホ展示モード用の戻るボタン */
+body.exhibition #modeToggle {
+    display: block !important;
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: 12px;
+    z-index: 1000;
+    padding: 9px 12px;
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 4px;
+    background: rgba(0,0,0,.55);
+    color: white;
+    font-size: 11px;
 }
 
-
-/* 展示モード：起動ボタンを隠す */
-body.exhibition #start {
-    display: none !important;
-}
-
-/* 左上パネルをタイトルと状態表示だけにする */
-body.exhibition::before {
-    height: 85px !important;
-}
-\n</style>
+</style>
     <link rel="manifest" href="./manifest.webmanifest">
 </head>
 
@@ -668,8 +654,6 @@ for (let i = 0; i < 4; i++) {
 
 // 展示モード：画面クリックまたはキーボードでカメラ起動
 function startExhibitionCamera() {
-    if (!document.body.classList.contains("exhibition")) return;
-
     const status = document.getElementById("status");
     const currentStatus = (status?.textContent || "").trim().toUpperCase();
 
@@ -679,20 +663,68 @@ function startExhibitionCamera() {
 }
 
 document.addEventListener("click", (event) => {
-    if (event.target.closest("#modeToggle")) return;
-    startExhibitionCamera();
-});
-
-document.addEventListener("keydown", (event) => {
+    if (!document.body.classList.contains("exhibition")) return;
     if (event.target.closest("#modeToggle")) return;
 
-    if (event.code === "Enter" || event.code === "Space") {
-        if (!document.body.classList.contains("exhibition")) return;
-        event.preventDefault();
+    if (running) {
+        stopExhibitionCamera();
+    } else {
         startExhibitionCamera();
     }
 });
-\n</script>
+
+// 展示モード：カメラ停止
+async function stopExhibitionCamera() {
+    if (!running) return;
+
+    running = false;
+
+    const video = document.getElementById("video");
+    const button = document.getElementById("start");
+    const canvas = document.getElementById("overlay");
+
+    if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+    }
+
+    video.pause();
+
+    if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (audioContext && audioContext.state === "running") {
+        await audioContext.suspend();
+    }
+
+    button.disabled = false;
+    button.textContent = "START CAMERA";
+    statusText.textContent = "READY";
+}
+
+// 展示モード：キーボード操作
+document.addEventListener("keydown", (event) => {
+    if (event.code === "Escape" && document.body.classList.contains("exhibition")) {
+        document.body.classList.remove("exhibition");
+        document.getElementById("modeToggle").textContent =
+            "展示モードに切り替える";
+        return;
+    }
+
+    if (event.code === "Enter") {
+        event.preventDefault();
+        startExhibitionCamera();
+    }
+
+    if (event.code === "Space") {
+        event.preventDefault();
+        stopExhibitionCamera();
+    }
+});
+
+</script>
 
 </body>
 </html>
