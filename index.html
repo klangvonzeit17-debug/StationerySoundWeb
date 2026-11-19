@@ -207,6 +207,14 @@ body.exhibition #modeToggle {
     font-size: 11px;
 }
 
+
+/* スマホでは展示モードを使用しない */
+@media (max-width: 768px) {
+    #modeToggle {
+        display: none !important;
+    }
+}
+
 </style>
     <link rel="manifest" href="./manifest.webmanifest">
 </head>
@@ -597,6 +605,11 @@ async function detectLoop() {
 document.getElementById("start").addEventListener("click", async () => {
     const button = document.getElementById("start");
 
+    if (running) {
+        await stopExhibitionCamera();
+        return;
+    }
+
     button.disabled = true;
     statusText.textContent = "LOADING...";
 
@@ -623,7 +636,8 @@ document.getElementById("start").addEventListener("click", async () => {
         running = true;
         statusText.textContent = "CAMERA ACTIVE";
 
-        button.textContent = "RUNNING";
+        button.disabled = false;
+        button.textContent = "STOP CAMERA";
 
         detectLoop();
 
